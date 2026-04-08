@@ -1,0 +1,47 @@
+NAME: pyle
+VERSION: "0.1.0"
+DESCRIPTION: >
+  Interactive disk usage explorer with a curses-based TUI. Browse directories
+  sorted by size, navigate with arrow keys, enter subdirectories, and see
+  proportional usage bars with color coding. A faster, more visual alternative
+  to ncdu. Pure Python, stdlib only.
+USAGE:
+  - "pyle [DIRECTORY]"
+  - "pyle"
+  - "pyle /home"
+  - "pyle --help"
+  - "pyle --version"
+OPTIONS:
+  - "-h, --help        Show help message"
+  - "-v, --version     Show version information"
+EXAMPLES:
+  - "pyle               # Explore current directory"
+  - "pyle /usr           # Explore /usr"
+  - "pyle ~/Documents    # Explore Documents folder"
+  - "pyle --version      # Show version"
+KEYBINDINGS:
+  - "↑/k               Move cursor up"
+  - "↓/j               Move cursor down"
+  - "→/l/Enter         Open directory"
+  - "←/h               Go to parent directory"
+  - "PgUp/PgDn         Page up/down"
+  - "g/G               Jump to first/last entry"
+  - "s                 Toggle sort: size (default) / name"
+  - "d                 Delete selected entry (with confirmation)"
+  - "r                 Refresh/rescan current directory"
+  - "q/Esc             Quit"
+OUTPUT: >
+  Interactive curses TUI showing directory contents sorted by size. Each entry
+  displays its size, percentage of parent total, a proportional color bar, and
+  the filename. Directories are blue, symlinks are cyan, errors are red. The
+  bar color shifts from green (small) to yellow (medium) to red (large).
+  Exit code 0 on normal exit; non-zero on errors.
+AUTHOR: "@spacemany2k38"
+DATE: "2026-04-08"
+NOTES:
+  - "Scans recursively to compute directory sizes before display."
+  - "Symlinks are not followed; their own size is reported."
+  - "Permission-denied directories show [!] and size 0."
+  - "Delete (d) asks for confirmation; removes files and directories recursively."
+  - "Pure Python — no external dependencies. Uses curses (stdlib)."
+  - "Works on macOS and Linux. Windows requires windows-curses."
