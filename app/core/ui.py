@@ -5,7 +5,10 @@
 
 import curses
 from pathlib import Path
-from .scanner import scan_directory, format_size, size_ratio, bar_string, count_items
+from .scanner import (
+    scan_directory, format_size, size_ratio, bar_string,
+    count_items, invalidate_cache,
+)
 
 
 COLOR_DIR = 1
@@ -45,16 +48,20 @@ def bar_color(ratio):
     return COLOR_BAR_LOW
 
 
+def _safe_addnstr(stdscr, row, col, text, length, attr=0):
+    try:
+        stdscr.addnstr(row, col, text, length, attr)
+    except curses.error:
+        pass
+
+
 def draw_header(stdscr, current_path, total_size, max_x):
     header = f" pyle: {current_path}"
     total_str = f"Total: {format_size(total_size)} "
-    pad = max_x - len(header) - len(total_str)
-    if pad < 0:
-        pad = 0
-    line = header + " " * pad + total_str
-    line = line[:max_x]
+    pad = max(0, max_x - len(header) - len(total_str))
+    line = (header + " " * pad + total_str)[:max_x]
     stdscr.attron(curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
-    stdscr.addnstr(0, 0, line.ljust(max_x), max_x)
+    _safe_addnstr(stdscr, 0, 0, line.ljust(max_x), max_x)
     stdscr.attroff(curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
 
 
@@ -87,21 +94,27 @@ def draw_entry(stdscr, row, entry, total, selected, max_x, bar_width):
 
     if selected:
         stdscr.attron(curses.color_pair(COLOR_SELECTED))
-        stdscr.addnstr(row, 0, " " * max_x, max_x)
+        _safe_addnstr(stdscr, row, 0, " " * max_x, max_x)
         stdscr.attroff(curses.color_pair(COLOR_SELECTED))
 
     attr = curses.color_pair(COLOR_SELECTED) if selected else 0
 
-    stdscr.addnstr(row, size_col, f"{size_str:>7}", 7, attr | curses.A_BOLD)
+    _safe_addnstr(
+        stdscr, row, size_col, f"{size_str:>7}", 7,
+        attr | curses.A_BOLD,
+    )
 
     pct_attr = attr if selected else curses.color_pair(COLOR_PERCENT)
-    stdscr.addnstr(row, pct_col, pct_str, 6, pct_attr)
+    _safe_addnstr(stdscr, row, pct_col, pct_str, 6, pct_attr)
 
     bc = bar_color(ratio)
     b_attr = attr if selected else curses.color_pair(bc)
-    stdscr.addnstr(row, bar_col, "[", 1, attr)
-    stdscr.addnstr(row, bar_col + 1, bar, bar_width, b_attr | curses.A_BOLD)
-    stdscr.addnstr(row, bar_col + 1 + bar_width, "]", 1, attr)
+    _safe_addnstr(stdscr, row, bar_col, "[", 1, attr)
+    _safe_addnstr(
+        stdscr, row, bar_col + 1, bar, bar_width,
+        b_attr | curses.A_BOLD,
+    )
+    _safe_addnstr(stdscr, row, bar_col + 1 + bar_width, "]", 1, attr)
 
     if available > 0:
         if selected:
@@ -114,7 +127,7 @@ def draw_entry(stdscr, row, entry, total, selected, max_x, bar_width):
             name_attr = curses.color_pair(COLOR_DIR) | curses.A_BOLD
         else:
             name_attr = curses.color_pair(COLOR_FILE)
-        stdscr.addnstr(row, name_col, name, available, name_attr)
+        _safe_addnstr(stdscr, row, name_col, name, available, name_attr)
 
 
 def draw_status(stdscr, row, current_path, entries, cursor, max_x):
@@ -122,37 +135,26 @@ def draw_status(stdscr, row, current_path, entries, cursor, max_x):
     entry = entries[cursor] if entries else None
 
     left = f" {dirs} dirs, {files} files"
-    if entry:
-        right = f" {entry['name']}  {format_size(entry['size'])} "
-    else:
-        right = ""
+    right = f" {entry['name']} {format_size(entry['size'])} " if entry else ""
 
-    pad = max_x - len(left) - len(right)
-    if pad < 0:
-        pad = 0
-    line = left + " " * pad + right
-    line = line[:max_x]
+    pad = max(0, max_x - len(left) - len(right))
+    line = (left + " " * pad + right)[:max_x]
 
     stdscr.attron(curses.color_pair(COLOR_STATUS))
-    try:
-        stdscr.addnstr(row, 0, line.ljust(max_x), max_x)
-    except curses.error:
-        pass
+    _safe_addnstr(stdscr, row, 0, line.ljust(max_x), max_x)
     stdscr.attroff(curses.color_pair(COLOR_STATUS))
 
 
 def draw_help(stdscr, row, max_x):
-    keys = (" q:quit  ↑↓/jk:nav  →/l/enter:open"
-            "  ←/h:back  d:del  r:refresh  s:sort")
-    try:
-        stdscr.addnstr(row, 0, keys[:max_x], max_x, curses.A_DIM)
-    except curses.error:
-        pass
+    keys = (" q:quit  jk:nav  l/enter:open"
+            "  h:back  d:del  r:refresh  s:sort")
+    _safe_addnstr(stdscr, row, 0, keys[:max_x], max_x, curses.A_DIM)
 
 
 def run_ui(stdscr, start_path):
     curses.curs_set(0)
     init_colors()
+    stdscr.timeout(50)
 
     history = []
     current_path = Path(start_path).resolve()
@@ -166,7 +168,7 @@ def run_ui(stdscr, start_path):
         max_y, max_x = stdscr.getmaxyx()
 
         if max_y < 5 or max_x < 40:
-            stdscr.addstr(0, 0, "Terminal too small")
+            _safe_addnstr(stdscr, 0, 0, "Terminal too small", 18)
             stdscr.refresh()
             key = stdscr.getch()
             if key == ord("q"):
@@ -187,25 +189,32 @@ def run_ui(stdscr, start_path):
             scroll_offset = cursor - visible_rows + 1
 
         if not entries:
-            stdscr.addstr(content_start, 2, "(empty directory)", curses.A_DIM)
+            _safe_addnstr(
+                stdscr, content_start, 2,
+                "(empty directory)", 17, curses.A_DIM,
+            )
         else:
             for i in range(visible_rows):
                 idx = scroll_offset + i
                 if idx >= len(entries):
                     break
-                row = content_start + i
-                selected = idx == cursor
                 draw_entry(
-                    stdscr, row, entries[idx],
-                    total, selected, max_x, bar_width,
+                    stdscr, content_start + i, entries[idx],
+                    total, idx == cursor, max_x, bar_width,
                 )
 
-        draw_status(stdscr, max_y - 2, current_path, entries, cursor, max_x)
+        draw_status(
+            stdscr, max_y - 2, current_path,
+            entries, cursor, max_x,
+        )
         draw_help(stdscr, max_y - 1, max_x)
 
         stdscr.refresh()
 
         key = stdscr.getch()
+
+        if key == -1:
+            continue
 
         if key == ord("q") or key == 27:
             break
@@ -218,9 +227,14 @@ def run_ui(stdscr, start_path):
             if cursor < len(entries) - 1:
                 cursor += 1
 
-        elif key in (curses.KEY_RIGHT, ord("l"), ord("\n"), curses.KEY_ENTER):
-            if entries and entries[cursor]["is_dir"] and not entries[cursor]["error"]:
-                history.append((current_path, cursor, scroll_offset))
+        elif key in (
+            curses.KEY_RIGHT, ord("l"), ord("\n"), curses.KEY_ENTER,
+        ):
+            if (entries and entries[cursor]["is_dir"]
+                    and not entries[cursor]["error"]):
+                history.append(
+                    (current_path, cursor, scroll_offset, entries, total),
+                )
                 current_path = entries[cursor]["path"]
                 entries, total = scan_directory(current_path)
                 if sort_by_name:
@@ -230,10 +244,12 @@ def run_ui(stdscr, start_path):
 
         elif key == curses.KEY_LEFT or key == ord("h"):
             if history:
-                current_path, cursor, scroll_offset = history.pop()
-                entries, total = scan_directory(current_path)
-                if sort_by_name:
-                    entries.sort(key=lambda e: e["name"].lower())
+                prev = history.pop()
+                current_path = prev[0]
+                cursor = prev[1]
+                scroll_offset = prev[2]
+                entries = prev[3]
+                total = prev[4]
             elif current_path.parent != current_path:
                 old_name = current_path.name
                 current_path = current_path.parent
@@ -248,6 +264,7 @@ def run_ui(stdscr, start_path):
                 scroll_offset = max(0, cursor - visible_rows // 2)
 
         elif key == ord("r"):
+            invalidate_cache(str(current_path))
             entries, total = scan_directory(current_path)
             if sort_by_name:
                 entries.sort(key=lambda e: e["name"].lower())
@@ -265,23 +282,28 @@ def run_ui(stdscr, start_path):
             if entries:
                 entry = entries[cursor]
                 target = entry["path"]
-                stdscr.addnstr(
-                    max_y - 1, 0,
+                _safe_addnstr(
+                    stdscr, max_y - 1, 0,
                     f" Delete {entry['name']}? (y/N) ".ljust(max_x),
                     max_x,
                     curses.color_pair(COLOR_ERROR) | curses.A_BOLD,
                 )
                 stdscr.refresh()
+                stdscr.timeout(-1)
                 confirm = stdscr.getch()
+                stdscr.timeout(50)
                 if confirm in (ord("y"), ord("Y")):
                     try:
                         if target.is_file() or target.is_symlink():
                             target.unlink()
                         elif target.is_dir():
                             _rmtree(target)
+                        invalidate_cache(str(current_path))
                         entries, total = scan_directory(current_path)
                         if sort_by_name:
-                            entries.sort(key=lambda e: e["name"].lower())
+                            entries.sort(
+                                key=lambda e: e["name"].lower(),
+                            )
                         if cursor >= len(entries):
                             cursor = max(0, len(entries) - 1)
                     except OSError:
