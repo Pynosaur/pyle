@@ -6,8 +6,9 @@
 import curses
 from pathlib import Path
 from .scanner import (
-    scan_directory, format_size, size_ratio, bar_string,
-    count_items, invalidate_cache,
+    LazyScanner,
+    format_size, size_ratio, bar_string,
+    invalidate_cache,
 )
 
 
@@ -55,9 +56,16 @@ def _safe_addnstr(stdscr, row, col, text, length, attr=0):
         pass
 
 
-def draw_header(stdscr, current_path, total_size, max_x):
+_SPINNER = "|/-\\"
+
+
+def draw_header(stdscr, current_path, total_size, max_x, scanning, tick=0):
     header = f" pyle: {current_path}"
-    total_str = f"Total: {format_size(total_size)} "
+    if scanning:
+        spin = _SPINNER[tick % len(_SPINNER)]
+        total_str = f"[{spin}] scanning... "
+    else:
+        total_str = f"Total: {format_size(total_size)} "
     pad = max(0, max_x - len(header) - len(total_str))
     line = (header + " " * pad + total_str)[:max_x]
     stdscr.attron(curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
@@ -72,7 +80,7 @@ def draw_entry(stdscr, row, entry, total, selected, max_x, bar_width):
     ratio = size_ratio(entry["size"], total)
     pct = ratio * 100
     size_str = format_size(entry["size"])
-    pct_str = f"{pct:5.1f}%"
+    pct_str = f"{pct:3.0f}%" if entry["size"] >= 0 else "  -"
     bar = bar_string(ratio, bar_width)
 
     name = entry["name"]
@@ -85,8 +93,8 @@ def draw_entry(stdscr, row, entry, total, selected, max_x, bar_width):
 
     size_col = 1
     pct_col = size_col + 8
-    bar_col = pct_col + 7
-    name_col = bar_col + bar_width + 1
+    bar_col = pct_col + 5
+    name_col = bar_col + bar_width + 2
 
     available = max_x - name_col - 1
     if available > 0 and len(name) > available:
@@ -130,12 +138,22 @@ def draw_entry(stdscr, row, entry, total, selected, max_x, bar_width):
         _safe_addnstr(stdscr, row, name_col, name, available, name_attr)
 
 
-def draw_status(stdscr, row, current_path, entries, cursor, max_x):
-    files, dirs = count_items(current_path)
+def draw_status(stdscr, row, scanner, entries, cursor, max_x):
     entry = entries[cursor] if entries else None
+    dirs = scanner.dirs_count
+    files = scanner.files_count
 
     left = f" {dirs} dirs, {files} files"
-    right = f" {entry['name']} {format_size(entry['size'])} " if entry else ""
+    if not scanner.listing_done:
+        left += " [listing...]"
+    elif scanner.is_scanning:
+        pending = sum(1 for e in entries if e["is_dir"] and e["size"] < 0)
+        done = dirs - pending
+        left += f" [{done}/{dirs} sized]"
+
+    right = ""
+    if entry:
+        right = f" {entry['name']} {format_size(entry['size'])} "
 
     pad = max(0, max_x - len(left) - len(right))
     line = (left + " " * pad + right)[:max_x]
@@ -151,19 +169,61 @@ def draw_help(stdscr, row, max_x):
     _safe_addnstr(stdscr, row, 0, keys[:max_x], max_x, curses.A_DIM)
 
 
+def _wait_listing(scanner, stdscr, path, max_x):
+    """Wait briefly for listing phase so we can locate the old cursor entry.
+    Shows spinner while waiting, gives up after 500ms."""
+    import time
+    deadline = time.monotonic() + 0.5
+    t = 0
+    while not scanner.listing_done:
+        if time.monotonic() > deadline:
+            break
+        t += 1
+        spin = _SPINNER[t % len(_SPINNER)]
+        header = f" pyle: {path}"
+        right = f"[{spin}] listing... "
+        pad = max(0, max_x - len(header) - len(right))
+        line = (header + " " * pad + right)[:max_x]
+        try:
+            stdscr.addnstr(0, 0, line.ljust(max_x), max_x)
+            stdscr.refresh()
+        except curses.error:
+            pass
+        time.sleep(0.05)
+
+
+def _sort_entries(entries, by_name):
+    if by_name:
+        entries.sort(key=lambda e: e["name"].lower())
+    else:
+        entries.sort(key=lambda e: e["size"], reverse=True)
+
+
 def run_ui(stdscr, start_path):
     curses.curs_set(0)
     init_colors()
-    stdscr.timeout(50)
+    stdscr.timeout(100)
 
     history = []
     current_path = Path(start_path).resolve()
-    entries, total = scan_directory(current_path)
+    scanner = LazyScanner(current_path)
+    entries = scanner.entries
+    total = 0
     cursor = 0
     scroll_offset = 0
     sort_by_name = False
+    tick = 0
 
     while True:
+        tick += 1
+
+        if scanner.dirty.is_set():
+            scanner.dirty.clear()
+            total = sum(e["size"] for e in entries if e["size"] > 0)
+            _sort_entries(entries, sort_by_name)
+
+        scanning = scanner.is_scanning
+
         stdscr.erase()
         max_y, max_x = stdscr.getmaxyx()
 
@@ -172,16 +232,20 @@ def run_ui(stdscr, start_path):
             stdscr.refresh()
             key = stdscr.getch()
             if key == ord("q"):
+                scanner.stop()
                 break
             continue
 
         bar_width = min(20, max(8, (max_x - 30) // 3))
 
-        draw_header(stdscr, str(current_path), total, max_x)
+        draw_header(stdscr, str(current_path), total, max_x, scanning, tick)
 
         content_start = 1
         content_end = max_y - 2
         visible_rows = content_end - content_start
+
+        if cursor >= len(entries) and entries:
+            cursor = len(entries) - 1
 
         if cursor < scroll_offset:
             scroll_offset = cursor
@@ -189,9 +253,14 @@ def run_ui(stdscr, start_path):
             scroll_offset = cursor - visible_rows + 1
 
         if not entries:
+            if scanner.listing_done:
+                msg = "(empty directory)"
+            else:
+                spin = _SPINNER[tick % len(_SPINNER)]
+                msg = f"[{spin}] loading..."
             _safe_addnstr(
                 stdscr, content_start, 2,
-                "(empty directory)", 17, curses.A_DIM,
+                msg, len(msg), curses.A_DIM,
             )
         else:
             for i in range(visible_rows):
@@ -203,10 +272,7 @@ def run_ui(stdscr, start_path):
                     total, idx == cursor, max_x, bar_width,
                 )
 
-        draw_status(
-            stdscr, max_y - 2, current_path,
-            entries, cursor, max_x,
-        )
+        draw_status(stdscr, max_y - 2, scanner, entries, cursor, max_x)
         draw_help(stdscr, max_y - 1, max_x)
 
         stdscr.refresh()
@@ -217,6 +283,7 @@ def run_ui(stdscr, start_path):
             continue
 
         if key == ord("q") or key == 27:
+            scanner.stop()
             break
 
         elif key == curses.KEY_UP or key == ord("k"):
@@ -224,38 +291,46 @@ def run_ui(stdscr, start_path):
                 cursor -= 1
 
         elif key == curses.KEY_DOWN or key == ord("j"):
-            if cursor < len(entries) - 1:
+            if entries and cursor < len(entries) - 1:
                 cursor += 1
 
         elif key in (
             curses.KEY_RIGHT, ord("l"), ord("\n"), curses.KEY_ENTER,
         ):
-            if (entries and entries[cursor]["is_dir"]
+            if (entries and cursor < len(entries)
+                    and entries[cursor]["is_dir"]
                     and not entries[cursor]["error"]):
-                history.append(
-                    (current_path, cursor, scroll_offset, entries, total),
-                )
+                scanner.stop()
+                history.append((
+                    current_path, cursor, scroll_offset,
+                    scanner, entries, total,
+                ))
                 current_path = entries[cursor]["path"]
-                entries, total = scan_directory(current_path)
-                if sort_by_name:
-                    entries.sort(key=lambda e: e["name"].lower())
+                scanner = LazyScanner(current_path)
+                entries = scanner.entries
+                total = 0
                 cursor = 0
                 scroll_offset = 0
 
         elif key == curses.KEY_LEFT or key == ord("h"):
             if history:
+                scanner.stop()
                 prev = history.pop()
                 current_path = prev[0]
                 cursor = prev[1]
                 scroll_offset = prev[2]
-                entries = prev[3]
-                total = prev[4]
+                scanner = prev[3]
+                entries = prev[4]
+                total = prev[5]
             elif current_path.parent != current_path:
+                scanner.stop()
                 old_name = current_path.name
                 current_path = current_path.parent
-                entries, total = scan_directory(current_path)
-                if sort_by_name:
-                    entries.sort(key=lambda e: e["name"].lower())
+                scanner = LazyScanner(current_path)
+                entries = scanner.entries
+                total = 0
+                _wait_listing(scanner, stdscr, current_path, max_x)
+                _sort_entries(entries, sort_by_name)
                 cursor = 0
                 for i, e in enumerate(entries):
                     if e["name"] == old_name:
@@ -264,22 +339,20 @@ def run_ui(stdscr, start_path):
                 scroll_offset = max(0, cursor - visible_rows // 2)
 
         elif key == ord("r"):
+            scanner.stop()
             invalidate_cache(str(current_path))
-            entries, total = scan_directory(current_path)
-            if sort_by_name:
-                entries.sort(key=lambda e: e["name"].lower())
+            scanner = LazyScanner(current_path)
+            entries = scanner.entries
+            total = 0
             if cursor >= len(entries):
                 cursor = max(0, len(entries) - 1)
 
         elif key == ord("s"):
             sort_by_name = not sort_by_name
-            if sort_by_name:
-                entries.sort(key=lambda e: e["name"].lower())
-            else:
-                entries.sort(key=lambda e: e["size"], reverse=True)
+            _sort_entries(entries, sort_by_name)
 
         elif key == ord("d"):
-            if entries:
+            if entries and cursor < len(entries):
                 entry = entries[cursor]
                 target = entry["path"]
                 _safe_addnstr(
@@ -291,19 +364,18 @@ def run_ui(stdscr, start_path):
                 stdscr.refresh()
                 stdscr.timeout(-1)
                 confirm = stdscr.getch()
-                stdscr.timeout(50)
+                stdscr.timeout(100)
                 if confirm in (ord("y"), ord("Y")):
                     try:
                         if target.is_file() or target.is_symlink():
                             target.unlink()
                         elif target.is_dir():
                             _rmtree(target)
+                        scanner.stop()
                         invalidate_cache(str(current_path))
-                        entries, total = scan_directory(current_path)
-                        if sort_by_name:
-                            entries.sort(
-                                key=lambda e: e["name"].lower(),
-                            )
+                        scanner = LazyScanner(current_path)
+                        entries = scanner.entries
+                        total = 0
                         if cursor >= len(entries):
                             cursor = max(0, len(entries) - 1)
                     except OSError:
@@ -313,14 +385,16 @@ def run_ui(stdscr, start_path):
             cursor = max(0, cursor - visible_rows)
 
         elif key == curses.KEY_NPAGE:
-            cursor = min(len(entries) - 1, cursor + visible_rows)
+            if entries:
+                cursor = min(len(entries) - 1, cursor + visible_rows)
 
         elif key == curses.KEY_HOME or key == ord("g"):
             cursor = 0
             scroll_offset = 0
 
         elif key == ord("G"):
-            cursor = max(0, len(entries) - 1)
+            if entries:
+                cursor = max(0, len(entries) - 1)
 
 
 def _rmtree(path):

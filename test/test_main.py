@@ -15,7 +15,7 @@ from app.core.scanner import (
     size_ratio,
     bar_string,
     scan_entry,
-    scan_directory,
+    scan_directory_shallow,
     dir_size,
     count_items,
 )
@@ -146,20 +146,21 @@ class TestScanDirectory(unittest.TestCase):
         shutil.rmtree(self.tmpdir)
 
     def test_returns_sorted_by_size(self):
-        entries, total = scan_directory(self.tmpdir)
-        sizes = [e["size"] for e in entries]
-        self.assertEqual(sizes, sorted(sizes, reverse=True))
+        entries, total = scan_directory_shallow(self.tmpdir)
+        known = [e["size"] for e in entries if e["size"] >= 0]
+        self.assertEqual(known, sorted(known, reverse=True))
 
-    def test_total_matches_sum(self):
-        entries, total = scan_directory(self.tmpdir)
-        self.assertEqual(total, sum(e["size"] for e in entries))
+    def test_total_matches_known_sum(self):
+        entries, total = scan_directory_shallow(self.tmpdir)
+        known_sum = sum(e["size"] for e in entries if e["size"] >= 0)
+        self.assertEqual(total, known_sum)
 
     def test_entry_count(self):
-        entries, _ = scan_directory(self.tmpdir)
+        entries, _ = scan_directory_shallow(self.tmpdir)
         self.assertEqual(len(entries), 3)
 
     def test_nonexistent_directory(self):
-        entries, total = scan_directory("/nonexistent/path/xyz123")
+        entries, total = scan_directory_shallow("/nonexistent/path/xyz123")
         self.assertEqual(entries, [])
         self.assertEqual(total, 0)
 
