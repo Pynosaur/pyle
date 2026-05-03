@@ -560,6 +560,12 @@ def run_ui(stdscr, start_path):
                         time.sleep(0.05)
                     if deleter.error is None:
                         removed = entries.pop(cursor)
+                        # Also remove from the unfiltered list if filtering
+                        if entries is not all_entries:
+                            try:
+                                all_entries.remove(removed)
+                            except ValueError:
+                                pass
                         if removed["is_dir"]:
                             scanner.dirs_count -= 1
                         else:
