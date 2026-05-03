@@ -17,9 +17,9 @@ OPTIONS:
   - "-v, --version     Show version information"
 EXAMPLES:
   - "pyle               # Explore current directory"
-  - "pyle /usr           # Explore /usr"
-  - "pyle ~/Documents    # Explore Documents folder"
-  - "pyle --version      # Show version"
+  - "pyle /usr          # Explore /usr"
+  - "pyle ~/Documents   # Explore Documents folder"
+  - "pyle --version     # Show version"
 KEYBINDINGS:
   - "space             Open search bar (filter by name)"
   - "↑/k               Move cursor up"
