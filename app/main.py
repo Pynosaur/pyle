@@ -30,6 +30,7 @@ def print_help():
     print("    -h, --help        Show help message")
     print("    -v, --version     Show version information")
     print("\nKEYBINDINGS:")
+    print("    space             Open search bar (filter entries by name)")
     print("    ↑/k               Move cursor up")
     print("    ↓/j               Move cursor down")
     print("    →/l/Enter         Open directory")

@@ -1,5 +1,5 @@
 NAME: pyle
-VERSION: "0.1.0"
+VERSION: "0.3.0"
 DESCRIPTION: >
   Interactive disk usage explorer with a curses-based TUI. Browse directories
   sorted by size, navigate with arrow keys, enter subdirectories, and see
@@ -20,6 +20,7 @@ EXAMPLES:
   - "pyle ~/Documents    # Explore Documents folder"
   - "pyle --version      # Show version"
 KEYBINDINGS:
+  - "space             Open search bar (filter by name)"
   - "↑/k               Move cursor up"
   - "↓/j               Move cursor down"
   - "→/l/Enter         Open directory"
@@ -30,6 +31,8 @@ KEYBINDINGS:
   - "d                 Delete selected entry (with confirmation)"
   - "r                 Refresh/rescan current directory"
   - "q/Esc             Quit"
+  - "Esc (in search)   Clear search and exit search mode"
+  - "Enter (in search) Confirm filter and exit search mode"
 OUTPUT: >
   Interactive curses TUI showing directory contents sorted by size. Each entry
   displays its size, percentage of parent total, a proportional color bar, and

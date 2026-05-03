@@ -168,8 +168,25 @@ def draw_status(stdscr, row, scanner, entries, cursor, max_x):
 
 def draw_help(stdscr, row, max_x):
     keys = (" q:quit  jk:nav  l/enter:open"
-            "  h:back  d:del  r:refresh  s:sort  p:pause")
+            "  h:back  d:del  r:refresh  s:sort  p:pause  space:search")
     _safe_addnstr(stdscr, row, 0, keys[:max_x], max_x, curses.A_DIM)
+
+
+def draw_search_bar(stdscr, row, query, max_x):
+    prompt = "/"
+    bar = f"{prompt}{query}"
+    # Draw highlighted background across the whole row
+    stdscr.attron(curses.color_pair(COLOR_STATUS))
+    _safe_addnstr(stdscr, row, 0, " " * max_x, max_x)
+    stdscr.attroff(curses.color_pair(COLOR_STATUS))
+    _safe_addnstr(stdscr, row, 0, bar[:max_x], max_x,
+        curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
+    # Show cursor position
+    cursor_col = min(len(bar), max_x - 1)
+    try:
+        stdscr.move(row, cursor_col)
+    except curses.error:
+        pass
 
 
 def _wait_listing(scanner, stdscr, path, max_x):
@@ -279,6 +296,7 @@ def run_ui(stdscr, start_path):
     current_path = Path(start_path).resolve()
     scanner = LazyScanner(current_path)
     entries = scanner.entries
+    all_entries = entries          # unfiltered reference
     total = 0
     cursor = 0
     scroll_offset = 0
@@ -286,13 +304,26 @@ def run_ui(stdscr, start_path):
     skip_confirm = False
     tick = 0
 
+    # Search state
+    search_mode = False
+    search_query = ""
+    filtered_entries = None       # None = no active filter
+
     while True:
         tick += 1
 
         if scanner.dirty.is_set():
             scanner.dirty.clear()
-            total = sum(e["size"] for e in entries if e["size"] > 0)
-            _sort_entries(entries, sort_by_name)
+            total = sum(e["size"] for e in all_entries if e["size"] > 0)
+            _sort_entries(all_entries, sort_by_name)
+            if search_query:
+                filtered_entries = [
+                    e for e in all_entries
+                    if search_query.lower() in e["name"].lower()
+                ]
+                entries = filtered_entries
+            else:
+                entries = all_entries
 
         stdscr.erase()
         max_y, max_x = stdscr.getmaxyx()
@@ -343,7 +374,12 @@ def run_ui(stdscr, start_path):
                 )
 
         draw_status(stdscr, max_y - 2, scanner, entries, cursor, max_x)
-        draw_help(stdscr, max_y - 1, max_x)
+        if search_mode:
+            curses.curs_set(1)
+            draw_search_bar(stdscr, max_y - 1, search_query, max_x)
+        else:
+            curses.curs_set(0)
+            draw_help(stdscr, max_y - 1, max_x)
 
         stdscr.refresh()
 
@@ -352,9 +388,54 @@ def run_ui(stdscr, start_path):
         if key == -1:
             continue
 
+        # ── Search mode input ─────────────────────────────────────────────
+        if search_mode:
+            if key in (27, curses.KEY_F1):          # Esc — clear and exit
+                search_mode = False
+                search_query = ""
+                entries = all_entries
+                cursor = 0
+                scroll_offset = 0
+            elif key in (ord("\n"), curses.KEY_ENTER):  # Enter — confirm
+                search_mode = False
+                cursor = 0
+                scroll_offset = 0
+            elif key in (curses.KEY_BACKSPACE, 127, 8):
+                search_query = search_query[:-1]
+                entries = [
+                    e for e in all_entries
+                    if search_query.lower() in e["name"].lower()
+                ] if search_query else all_entries
+                cursor = 0
+                scroll_offset = 0
+            elif 32 <= key <= 126:                  # printable char
+                search_query += chr(key)
+                entries = [
+                    e for e in all_entries
+                    if search_query.lower() in e["name"].lower()
+                ]
+                cursor = 0
+                scroll_offset = 0
+            continue
+        # ── Normal mode input ─────────────────────────────────────────────
+
         if key == ord("q") or key == 27:
             scanner.stop()
             break
+
+        elif key == ord(" "):          # spacebar — open/close search
+            search_mode = not search_mode
+            if search_mode:
+                search_query = ""
+                entries = all_entries
+                cursor = 0
+                scroll_offset = 0
+            else:
+                # closing without Enter clears the filter
+                search_query = ""
+                entries = all_entries
+                cursor = 0
+                scroll_offset = 0
 
         elif key == curses.KEY_UP or key == ord("k"):
             if cursor > 0:
@@ -373,14 +454,17 @@ def run_ui(stdscr, start_path):
                 scanner.stop()
                 history.append((
                     current_path, cursor, scroll_offset,
-                    scanner, entries, total,
+                    scanner, all_entries, total,
                 ))
                 current_path = entries[cursor]["path"]
                 scanner = LazyScanner(current_path)
-                entries = scanner.entries
+                all_entries = scanner.entries
+                entries = all_entries
                 total = 0
                 cursor = 0
                 scroll_offset = 0
+                search_mode = False
+                search_query = ""
 
         elif key == curses.KEY_LEFT or key == ord("h"):
             if history:
@@ -390,15 +474,21 @@ def run_ui(stdscr, start_path):
                 cursor = prev[1]
                 scroll_offset = prev[2]
                 scanner = prev[3]
-                entries = prev[4]
+                all_entries = prev[4]
+                entries = all_entries
                 total = prev[5]
+                search_mode = False
+                search_query = ""
             elif current_path.parent != current_path:
                 scanner.stop()
                 old_name = current_path.name
                 current_path = current_path.parent
                 scanner = LazyScanner(current_path)
-                entries = scanner.entries
+                all_entries = scanner.entries
+                entries = all_entries
                 total = 0
+                search_mode = False
+                search_query = ""
                 _wait_listing(scanner, stdscr, current_path, max_x)
                 _sort_entries(entries, sort_by_name)
                 cursor = 0
@@ -412,14 +502,22 @@ def run_ui(stdscr, start_path):
             scanner.stop()
             invalidate_cache(str(current_path))
             scanner = LazyScanner(current_path)
-            entries = scanner.entries
+            all_entries = scanner.entries
+            entries = all_entries
             total = 0
+            search_mode = False
+            search_query = ""
             if cursor >= len(entries):
                 cursor = max(0, len(entries) - 1)
 
         elif key == ord("s"):
             sort_by_name = not sort_by_name
-            _sort_entries(entries, sort_by_name)
+            _sort_entries(all_entries, sort_by_name)
+            if search_query:
+                entries = [
+                    e for e in all_entries
+                    if search_query.lower() in e["name"].lower()
+                ]
 
         elif key == ord("p"):
             scanner.toggle_pause()
