@@ -341,7 +341,7 @@ def run_ui(stdscr, start_path):
             _safe_addnstr(stdscr, 0, 0, "Terminal too small", 18)
             stdscr.refresh()
             key = stdscr.getch()
-            if key == ord("q"):
+            if key in (ord("q"), ord("Q")):
                 scanner.stop()
                 break
             continue
@@ -428,7 +428,7 @@ def run_ui(stdscr, start_path):
             continue
         # ── Normal mode input ─────────────────────────────────────────────
 
-        if key == ord("q") or key == 27:
+        if key in (ord("q"), ord("Q"), 27):
             scanner.stop()
             break
 
