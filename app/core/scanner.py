@@ -11,6 +11,15 @@ _size_cache = {}
 _cache_lock = threading.Lock()
 
 
+def _disk_usage(st):
+    """Return actual disk usage from a stat result.
+    Uses st_blocks (512-byte units) on Unix; falls back to st_size."""
+    try:
+        return st.st_blocks * 512
+    except AttributeError:
+        return st.st_size
+
+
 def invalidate_cache(path=None):
     with _cache_lock:
         if path is None:
@@ -69,9 +78,9 @@ def dir_size(path, _depth=0, _max_depth=50, _cancel=None):
                     return 0
                 try:
                     if entry.is_symlink():
-                        total += entry.stat(follow_symlinks=False).st_size
+                        total += _disk_usage(entry.stat(follow_symlinks=False))
                     elif entry.is_file(follow_symlinks=False):
-                        total += entry.stat(follow_symlinks=False).st_size
+                        total += _disk_usage(entry.stat(follow_symlinks=False))
                     elif entry.is_dir(follow_symlinks=False):
                         total += dir_size(
                             entry.path, _depth + 1, _max_depth,
@@ -99,7 +108,7 @@ def scan_entry(path):
             return {
                 "path": path,
                 "name": path.name,
-                "size": st.st_size,
+                "size": _disk_usage(st),
                 "is_dir": False,
                 "is_symlink": True,
                 "error": None,
@@ -108,7 +117,7 @@ def scan_entry(path):
             return {
                 "path": path,
                 "name": path.name,
-                "size": path.stat().st_size,
+                "size": _disk_usage(path.stat()),
                 "is_dir": False,
                 "is_symlink": False,
                 "error": None,
@@ -164,7 +173,7 @@ def scan_directory_shallow(path):
                         entries.append({
                             "path": Path(de.path),
                             "name": de.name,
-                            "size": st.st_size,
+                            "size": _disk_usage(st),
                             "is_dir": False,
                             "is_symlink": True,
                             "error": None,
@@ -174,7 +183,7 @@ def scan_directory_shallow(path):
                         entries.append({
                             "path": Path(de.path),
                             "name": de.name,
-                            "size": st.st_size,
+                            "size": _disk_usage(st),
                             "is_dir": False,
                             "is_symlink": False,
                             "error": None,
@@ -274,7 +283,7 @@ class LazyScanner:
                 return {
                     "path": Path(de.path),
                     "name": de.name,
-                    "size": st.st_size,
+                    "size": _disk_usage(st),
                     "is_dir": False,
                     "is_symlink": True,
                     "error": None,
@@ -284,7 +293,7 @@ class LazyScanner:
                 return {
                     "path": Path(de.path),
                     "name": de.name,
-                    "size": st.st_size,
+                    "size": _disk_usage(st),
                     "is_dir": False,
                     "is_symlink": False,
                     "error": None,

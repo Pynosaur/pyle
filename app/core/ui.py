@@ -168,7 +168,8 @@ def draw_status(stdscr, row, scanner, entries, cursor, max_x):
 
 def draw_help(stdscr, row, max_x):
     keys = (" q:quit  jk:nav  l/enter:open"
-            "  h:back  d:del  r:refresh  s:sort  p:pause  space:search")
+            "  h:back  d:del  r:refresh  s:sort  p:pause  space:search"
+            "  +/-:top/bottom")
     _safe_addnstr(stdscr, row, 0, keys[:max_x], max_x, curses.A_DIM)
 
 
@@ -583,11 +584,11 @@ def run_ui(stdscr, start_path):
             if entries:
                 cursor = min(len(entries) - 1, cursor + visible_rows)
 
-        elif key == curses.KEY_HOME or key == ord("g"):
+        elif key == curses.KEY_HOME or key == ord("g") or key == ord("+"):
             cursor = 0
             scroll_offset = 0
 
-        elif key == ord("G"):
+        elif key == ord("G") or key == ord("-"):
             if entries:
                 cursor = max(0, len(entries) - 1)
 
