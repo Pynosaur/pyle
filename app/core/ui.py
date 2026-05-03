@@ -194,6 +194,75 @@ def _wait_listing(scanner, stdscr, path, max_x):
         time.sleep(0.05)
 
 
+def _draw_confirm_dialog(stdscr, name, max_y, max_x):
+    """Draw ncdu-style centered delete confirmation dialog.
+    Returns: 'yes', 'no', or 'never'."""
+    title = " Confirm delete "
+    question = f'Are you sure you want to delete "{name}"?'
+    options = ["yes", "no", "don't ask me again"]
+
+    box_w = max(len(question) + 4, 44)
+    box_h = 7
+    top = (max_y - box_h) // 2
+    left = (max_x - box_w) // 2
+
+    selected = 1
+
+    stdscr.timeout(-1)
+
+    while True:
+        win = curses.newwin(box_h, box_w, top, left)
+        win.erase()
+        win.border()
+
+        tl = (box_w - len(title)) // 2
+        try:
+            win.addnstr(0, tl, title, len(title), curses.A_BOLD)
+        except curses.error:
+            pass
+
+        ql = (box_w - len(question)) // 2
+        try:
+            win.addnstr(2, ql, question, len(question))
+        except curses.error:
+            pass
+
+        col = 4
+        for i, label in enumerate(options):
+            if i == selected:
+                attr = curses.A_REVERSE | curses.A_BOLD
+            else:
+                attr = curses.A_NORMAL
+            try:
+                win.addnstr(4, col, label, len(label), attr)
+            except curses.error:
+                pass
+            col += len(label) + 4
+
+        win.refresh()
+
+        key = stdscr.getch()
+        if key == curses.KEY_LEFT or key == ord("h"):
+            selected = (selected - 1) % len(options)
+        elif key == curses.KEY_RIGHT or key == ord("l"):
+            selected = (selected + 1) % len(options)
+        elif key == ord("\t"):
+            selected = (selected + 1) % len(options)
+        elif key in (ord("\n"), curses.KEY_ENTER, ord(" ")):
+            break
+        elif key == ord("y") or key == ord("Y"):
+            selected = 0
+            break
+        elif key == ord("n") or key == ord("N") or key == 27:
+            selected = 1
+            break
+
+    stdscr.timeout(100)
+    del win
+
+    return ["yes", "no", "never"][selected]
+
+
 def _sort_entries(entries, by_name):
     if by_name:
         entries.sort(key=lambda e: e["name"].lower())
@@ -214,6 +283,7 @@ def run_ui(stdscr, start_path):
     cursor = 0
     scroll_offset = 0
     sort_by_name = False
+    skip_confirm = False
     tick = 0
 
     while True:
@@ -358,29 +428,31 @@ def run_ui(stdscr, start_path):
             if entries and cursor < len(entries):
                 entry = entries[cursor]
                 target = entry["path"]
-                _safe_addnstr(
-                    stdscr, max_y - 1, 0,
-                    f" Delete {entry['name']}? (y/N) ".ljust(max_x),
-                    max_x,
-                    curses.color_pair(COLOR_ERROR) | curses.A_BOLD,
-                )
-                stdscr.refresh()
-                stdscr.timeout(-1)
-                confirm = stdscr.getch()
-                stdscr.timeout(100)
-                if confirm in (ord("y"), ord("Y")):
+                if skip_confirm:
+                    choice = "yes"
+                else:
+                    choice = _draw_confirm_dialog(
+                        stdscr, entry["name"], max_y, max_x,
+                    )
+                if choice == "never":
+                    skip_confirm = True
+                    choice = "yes"
+                if choice == "yes":
                     try:
                         if target.is_file() or target.is_symlink():
                             target.unlink()
                         elif target.is_dir():
                             _rmtree(target)
-                        scanner.stop()
-                        invalidate_cache(str(current_path))
-                        scanner = LazyScanner(current_path)
-                        entries = scanner.entries
-                        total = 0
-                        if cursor >= len(entries):
-                            cursor = max(0, len(entries) - 1)
+                        removed = entries.pop(cursor)
+                        if removed["is_dir"]:
+                            scanner.dirs_count -= 1
+                        else:
+                            scanner.files_count -= 1
+                        if removed["size"] > 0:
+                            total -= removed["size"]
+                        invalidate_cache(str(target))
+                        if cursor >= len(entries) and entries:
+                            cursor = len(entries) - 1
                     except OSError:
                         pass
 
