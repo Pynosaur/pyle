@@ -225,6 +225,7 @@ class LazyScanner:
         self.entries = []
         self._lock = threading.Lock()
         self.cancel = cancel or threading.Event()
+        self.paused = threading.Event()
         self.dirty = threading.Event()
         self.listing_done = False
         self.sizing_done = False
@@ -240,10 +241,15 @@ class LazyScanner:
         if not self.cancel.is_set():
             self._phase_sizes()
 
+    def _wait_if_paused(self):
+        while self.paused.is_set() and not self.cancel.is_set():
+            self.cancel.wait(0.1)
+
     def _phase_list(self):
         try:
             with os.scandir(self.path) as it:
                 for de in it:
+                    self._wait_if_paused()
                     if self.cancel.is_set():
                         return
                     entry = self._make_entry(de)
@@ -316,6 +322,7 @@ class LazyScanner:
     def _phase_sizes(self):
         snapshot = list(self.entries)
         for entry in snapshot:
+            self._wait_if_paused()
             if self.cancel.is_set():
                 return
             if entry["is_dir"] and entry["size"] < 0:
@@ -332,8 +339,26 @@ class LazyScanner:
     def stop(self):
         self.cancel.set()
 
+    def pause(self):
+        self.paused.set()
+
+    def resume(self):
+        self.paused.clear()
+
+    def toggle_pause(self):
+        if self.paused.is_set():
+            self.paused.clear()
+        else:
+            self.paused.set()
+
+    @property
+    def is_paused(self):
+        return self.paused.is_set()
+
     @property
     def is_scanning(self):
+        if self.paused.is_set():
+            return False
         return not self.sizing_done
 
 

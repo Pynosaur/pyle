@@ -59,9 +59,11 @@ def _safe_addnstr(stdscr, row, col, text, length, attr=0):
 _SPINNER = "|/-\\"
 
 
-def draw_header(stdscr, current_path, total_size, max_x, scanning, tick=0):
+def draw_header(stdscr, current_path, total_size, max_x, scanner, tick=0):
     header = f" pyle: {current_path}"
-    if scanning:
+    if scanner.is_paused:
+        total_str = "[paused] "
+    elif scanner.is_scanning:
         spin = _SPINNER[tick % len(_SPINNER)]
         total_str = f"[{spin}] scanning... "
     else:
@@ -165,7 +167,7 @@ def draw_status(stdscr, row, scanner, entries, cursor, max_x):
 
 def draw_help(stdscr, row, max_x):
     keys = (" q:quit  jk:nav  l/enter:open"
-            "  h:back  d:del  r:refresh  s:sort")
+            "  h:back  d:del  r:refresh  s:sort  p:pause")
     _safe_addnstr(stdscr, row, 0, keys[:max_x], max_x, curses.A_DIM)
 
 
@@ -222,8 +224,6 @@ def run_ui(stdscr, start_path):
             total = sum(e["size"] for e in entries if e["size"] > 0)
             _sort_entries(entries, sort_by_name)
 
-        scanning = scanner.is_scanning
-
         stdscr.erase()
         max_y, max_x = stdscr.getmaxyx()
 
@@ -238,7 +238,7 @@ def run_ui(stdscr, start_path):
 
         bar_width = min(20, max(8, (max_x - 30) // 3))
 
-        draw_header(stdscr, str(current_path), total, max_x, scanning, tick)
+        draw_header(stdscr, str(current_path), total, max_x, scanner, tick)
 
         content_start = 1
         content_end = max_y - 2
@@ -350,6 +350,9 @@ def run_ui(stdscr, start_path):
         elif key == ord("s"):
             sort_by_name = not sort_by_name
             _sort_entries(entries, sort_by_name)
+
+        elif key == ord("p"):
+            scanner.toggle_pause()
 
         elif key == ord("d"):
             if entries and cursor < len(entries):
