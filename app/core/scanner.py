@@ -240,6 +240,7 @@ class LazyScanner:
         self.sizing_done = False
         self.files_count = 0
         self.dirs_count = 0
+        self.dirs_sized = 0
         self._thread = threading.Thread(
             target=self._run, daemon=True,
         )
@@ -255,24 +256,29 @@ class LazyScanner:
             self.cancel.wait(0.1)
 
     def _phase_list(self):
+        batch = []
+        dirs = 0
+        files = 0
         try:
             with os.scandir(self.path) as it:
                 for de in it:
-                    self._wait_if_paused()
                     if self.cancel.is_set():
                         return
                     entry = self._make_entry(de)
                     if entry is None:
                         continue
-                    with self._lock:
-                        self.entries.append(entry)
-                        if entry["is_dir"]:
-                            self.dirs_count += 1
-                        else:
-                            self.files_count += 1
-                    self.dirty.set()
+                    batch.append(entry)
+                    if entry["is_dir"]:
+                        dirs += 1
+                    else:
+                        files += 1
         except (PermissionError, OSError):
             pass
+        # Expose all entries at once
+        with self._lock:
+            self.entries.extend(batch)
+            self.dirs_count = dirs
+            self.files_count = files
         self.listing_done = True
         self.dirty.set()
 
@@ -329,19 +335,64 @@ class LazyScanner:
         return None
 
     def _phase_sizes(self):
-        snapshot = list(self.entries)
-        for entry in snapshot:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        snapshot = [e for e in self.entries if e["is_dir"] and e["size"] < 0]
+        if not snapshot:
+            self.sizing_done = True
+            self.dirty.set()
+            return
+
+        workers = min(8, len(snapshot))
+
+        def _size_one(entry):
+            """Size a directory incrementally: walk its immediate children
+            one by one, updating the entry after each so the UI shows
+            the size growing in real time."""
             self._wait_if_paused()
             if self.cancel.is_set():
                 return
-            if entry["is_dir"] and entry["size"] < 0:
-                size = dir_size(
-                    str(entry["path"]), _cancel=self.cancel,
-                )
+            entry["size"] = 0
+            self.dirty.set()
+            try:
+                with os.scandir(str(entry["path"])) as it:
+                    for child in it:
+                        self._wait_if_paused()
+                        if self.cancel.is_set():
+                            return
+                        try:
+                            if child.is_symlink():
+                                entry["size"] += _disk_usage(
+                                    child.stat(follow_symlinks=False),
+                                )
+                            elif child.is_file(follow_symlinks=False):
+                                entry["size"] += _disk_usage(
+                                    child.stat(follow_symlinks=False),
+                                )
+                            elif child.is_dir(follow_symlinks=False):
+                                entry["size"] += dir_size(
+                                    child.path, _cancel=self.cancel,
+                                )
+                        except (PermissionError, OSError):
+                            continue
+                        if self.cancel.is_set():
+                            return
+                        self.dirty.set()
+            except (PermissionError, OSError):
+                pass
+            # Cache the final result
+            with _cache_lock:
+                _size_cache[str(entry["path"])] = entry["size"]
+            self.dirs_sized += 1
+            self.dirty.set()
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_size_one, e): e for e in snapshot}
+            for fut in as_completed(futures):
                 if self.cancel.is_set():
+                    pool.shutdown(wait=False, cancel_futures=True)
                     return
-                entry["size"] = size
-                self.dirty.set()
+
         self.sizing_done = True
         self.dirty.set()
 

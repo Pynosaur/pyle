@@ -66,9 +66,15 @@ def draw_header(stdscr, current_path, total_size, max_x, scanner, tick=0):
         total_str = "[paused] "
     elif scanner.is_scanning:
         spin = _SPINNER[tick % len(_SPINNER)]
-        total_str = f"[{spin}] scanning... "
+        dirs = scanner.dirs_count
+        if dirs > 0:
+            done = scanner.dirs_sized
+            pct = int(done * 100 / dirs)
+            total_str = f"[{spin}] {pct}% ({done}/{dirs}) {format_size(total_size)} "
+        else:
+            total_str = f"[{spin}] scanning... "
     else:
-        total_str = f"Total: {format_size(total_size)} "
+        total_str = f"Size: {format_size(total_size)} "
     pad = max(0, max_x - len(header) - len(total_str))
     line = (header + " " * pad + total_str)[:max_x]
     stdscr.attron(curses.color_pair(COLOR_HEADER) | curses.A_BOLD)
@@ -150,13 +156,15 @@ def draw_status(stdscr, row, scanner, entries, cursor, max_x):
     if not scanner.listing_done:
         left += " [listing...]"
     elif scanner.is_scanning:
-        pending = sum(1 for e in entries if e["is_dir"] and e["size"] < 0)
-        done = dirs - pending
+        done = scanner.dirs_sized
         left += f" [{done}/{dirs} sized]"
 
     right = ""
     if entry:
-        right = f" {entry['name']} {format_size(entry['size'])} "
+        name = entry['name']
+        if entry['is_dir']:
+            name += '/'
+        right = f" {name} {format_size(entry['size'])} "
 
     pad = max(0, max_x - len(left) - len(right))
     line = (left + " " * pad + right)[:max_x]
@@ -169,7 +177,7 @@ def draw_status(stdscr, row, scanner, entries, cursor, max_x):
 def draw_help(stdscr, row, max_x):
     keys = (" q:quit  jk:nav  l/enter:open"
             "  h:back  d:del  r:refresh  s:sort  p:pause  space:search"
-            "  +/-:top/bottom")
+            "  [/]:top/bottom")
     _safe_addnstr(stdscr, row, 0, keys[:max_x], max_x, curses.A_DIM)
 
 
@@ -584,11 +592,11 @@ def run_ui(stdscr, start_path):
             if entries:
                 cursor = min(len(entries) - 1, cursor + visible_rows)
 
-        elif key == curses.KEY_HOME or key == ord("g") or key == ord("+"):
+        elif key == curses.KEY_HOME or key == ord("g") or key == ord("["):
             cursor = 0
             scroll_offset = 0
 
-        elif key == ord("G") or key == ord("-"):
+        elif key == ord("G") or key == ord("]"):
             if entries:
                 cursor = max(0, len(entries) - 1)
 
