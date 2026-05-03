@@ -4,6 +4,7 @@
 # 2026-04-08
 
 import curses
+import time
 from pathlib import Path
 from .scanner import (
     LazyScanner,
@@ -96,7 +97,7 @@ def draw_entry(stdscr, row, entry, total, selected, max_x, bar_width):
     size_col = 1
     pct_col = size_col + 8
     bar_col = pct_col + 5
-    name_col = bar_col + bar_width + 2
+    name_col = bar_col + bar_width + 4
 
     available = max_x - name_col - 1
     if available > 0 and len(name) > available:
@@ -174,7 +175,6 @@ def draw_help(stdscr, row, max_x):
 def _wait_listing(scanner, stdscr, path, max_x):
     """Wait briefly for listing phase so we can locate the old cursor entry.
     Shows spinner while waiting, gives up after 500ms."""
-    import time
     deadline = time.monotonic() + 0.5
     t = 0
     while not scanner.listing_done:
@@ -438,11 +438,29 @@ def run_ui(stdscr, start_path):
                     skip_confirm = True
                     choice = "yes"
                 if choice == "yes":
-                    try:
-                        if target.is_file() or target.is_symlink():
-                            target.unlink()
-                        elif target.is_dir():
-                            _rmtree(target)
+                    deleter = _AsyncDelete(target)
+                    dt = 0
+                    while not deleter.done:
+                        dt += 1
+                        spin = _SPINNER[dt % len(_SPINNER)]
+                        with deleter._lock:
+                            cur = deleter.current
+                        if len(cur) > max_x - 30:
+                            cur = cur[:max_x - 33] + "..."
+                        msg = (
+                            f" [{spin}] Deleting... "
+                            f"{deleter.count} removed  {cur}"
+                        )
+                        stdscr.move(max_y - 1, 0)
+                        stdscr.clrtoeol()
+                        _safe_addnstr(
+                            stdscr, max_y - 1, 0,
+                            msg.ljust(max_x)[:max_x], max_x,
+                            curses.color_pair(COLOR_ERROR),
+                        )
+                        stdscr.refresh()
+                        time.sleep(0.05)
+                    if deleter.error is None:
                         removed = entries.pop(cursor)
                         if removed["is_dir"]:
                             scanner.dirs_count -= 1
@@ -453,8 +471,6 @@ def run_ui(stdscr, start_path):
                         invalidate_cache(str(target))
                         if cursor >= len(entries) and entries:
                             cursor = len(entries) - 1
-                    except OSError:
-                        pass
 
         elif key == curses.KEY_PPAGE:
             cursor = max(0, cursor - visible_rows)
@@ -472,10 +488,50 @@ def run_ui(stdscr, start_path):
                 cursor = max(0, len(entries) - 1)
 
 
-def _rmtree(path):
-    for child in path.iterdir():
-        if child.is_dir() and not child.is_symlink():
-            _rmtree(child)
-        else:
-            child.unlink()
-    path.rmdir()
+import threading
+
+
+class _AsyncDelete:
+    """Delete a path in a background thread with progress tracking."""
+
+    def __init__(self, path):
+        self.path = path
+        self.count = 0
+        self.current = ""
+        self.done = False
+        self.error = None
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(
+            target=self._run, daemon=True,
+        )
+        self._thread.start()
+
+    def _run(self):
+        try:
+            if self.path.is_file() or self.path.is_symlink():
+                with self._lock:
+                    self.current = self.path.name
+                self.path.unlink()
+                self.count = 1
+            elif self.path.is_dir():
+                self._rmtree(self.path)
+        except OSError as exc:
+            self.error = str(exc)
+        self.done = True
+
+    def _rmtree(self, path):
+        try:
+            for child in path.iterdir():
+                if child.is_dir() and not child.is_symlink():
+                    self._rmtree(child)
+                else:
+                    with self._lock:
+                        self.current = child.name
+                    try:
+                        child.unlink()
+                        self.count += 1
+                    except OSError:
+                        pass
+            path.rmdir()
+        except OSError:
+            pass
