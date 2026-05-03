@@ -1,6 +1,6 @@
 # pyle
 
-Interactive disk usage explorer with a curses-based TUI. A faster, more visual alternative to `ncdu`. Part of the [Pynosaur](https://pynosaur.org) ecosystem.
+**Python Lite Explorer** — interactive disk usage explorer with a curses-based TUI. A faster, more visual alternative to `ncdu`. Part of the [Pynosaur](https://pynosaur.org) ecosystem.
 
 Browse directories sorted by size with color-coded bars, navigate with arrow keys, and drill into subdirectories instantly.
 
