@@ -4,6 +4,7 @@
 # 2026-04-08
 
 import curses
+import os
 import sys
 from pathlib import Path
 
@@ -72,6 +73,7 @@ def main():
         return 1
 
     try:
+        os.environ.setdefault('ESCDELAY', '25')
         curses.wrapper(lambda stdscr: run_ui(stdscr, target_path))
     except KeyboardInterrupt:
         pass

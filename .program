@@ -1,5 +1,5 @@
 name: pyle
-version: 0.3.4
+version: 0.3.5
 author: @spacemany2k38
 description: Interactive disk usage explorer with curses TUI
 type: cli-tool
