@@ -42,7 +42,7 @@ jobs:
 
     - name: Run unit tests
       run: |
-        python test/test_main.py
+        python -m unittest discover -s test -v
 
   build:
     runs-on: macos-latest
